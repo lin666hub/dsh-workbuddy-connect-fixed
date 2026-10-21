@@ -1,42 +1,31 @@
 # DSH WorkBuddy Connect (Fixed)
 
+[![npm](https://img.shields.io/npm/v/dsh-workbuddy-connect-fixed.svg)](https://www.npmjs.com/package/dsh-workbuddy-connect-fixed)
+[![CI](https://github.com/lin666hub/dsh-workbuddy-connect-fixed/actions/workflows/ci.yml/badge.svg)](https://github.com/lin666hub/dsh-workbuddy-connect-fixed/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > **第三方修复分支 / Third-party fixed fork**
 >
 > 本仓库是 [`corrinehu/dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect) 的第三方衍生版本，遵循其 MIT 许可证，保留原作者署名。
->
-> **本分支解决的问题**：WorkBuddy 网关自 2026-10-20 起对非官方客户端做渠道校验，请求的系统提示词若以其它客户端的身份签名开头（如 DeepSeek Harness 的 `You are an AI agent powered by DeepSeek Harness.`），上游会返回 HTTP 400 / code 11128「请求被拦截，请重新发送」，导致在 DSH 中使用 WorkBuddy 模型完全不可用。
->
-> **修复内容**：
-> 1. `prepareChatBody()` 新增 `neutralizeRejectedSystemSignature()`——识别被拒的系统提示词开头签名，在其前面插入一句无害前缀，正文原样保留。
-> 2. `prepareCnChatBody()` 补齐 `developer`→`system` 归一化与签名规避，使 CN 区与国际区的防护一致。
-> 3. 新增回归测试 `tests/issue-144-system-signature.spec.ts`。
->
-> **重要声明**：原项目作者已声明停止维护，并明确表示尊重 WorkBuddy 对官方客户端与第三方接入的区分。本分支仅作技术研究与本地自救用途；请自行评估 WorkBuddy 的服务条款，办公场景建议优先使用官方 WorkBuddy 客户端。
->
-> 原项目 README 与完整文档见下方（[English](./README.en.md) | 中文），原项目停止维护公告见 [原文 README](./README.upstream.md)。
 
-## 安装
+## 安装 / Install
 
 ```powershell
-# 在 DSH profile 目录执行
 pnpm add dsh-workbuddy-connect-fixed
 ```
 
-或让本机已有的 Agent 帮你安装（把这段原样发给它）：
+或从源码：
 
-```text
-请帮我安装 DSH（DeepSeek Harness）插件 dsh-workbuddy-connect-fixed（项目地址：https://github.com/lin666hub/dsh-workbuddy-connect-fixed）：
-先阅读项目 README，确认我使用的界面（Web / Desktop / TUI）与 DSH 内核版本，桌面版以 App 内置核心为准；
-再从 npm 安装 dsh-workbuddy-connect-fixed@0.1.0；
-任何本地文件或配置改动先征得我同意并做好备份；
-装完后验证模型选择器里出现 WorkBuddy 分组，并陪我完成一次简短对话。
+```powershell
+git clone https://github.com/lin666hub/dsh-workbuddy-connect-fixed.git
+cd dsh-workbuddy-connect-fixed
+pnpm install
+pnpm run build
 ```
 
-> 内核与插件版本对应关系见文末「版本兼容与历史版本」（沿用上游）。
+## 本分支解决的问题
 
-## 修复原理
-
-上游的拒绝文案是：
+WorkBuddy 网关自 2026-10-20 起对非官方客户端做渠道校验。请求的系统提示词若以其它客户端的身份签名开头（例如 DeepSeek Harness 的 `You are an AI agent powered by DeepSeek Harness.`），上游会返回：
 
 ```json
 {"code":11128,"msg":"Illegal API invocation from an unapproved channel",
@@ -44,19 +33,40 @@ pnpm add dsh-workbuddy-connect-fixed
  "displayTips":{"zh":"这次调用没通过渠道校验，可能不是官方客户端发出的。"}}
 ```
 
-网关对**系统提示词的开头**做渠道校验，而不是对内容做检测：
+结果是：在 DeepSeek Harness 中切到任何 WorkBuddy 模型都会立刻失败。
 
-- 同一句话放在 `user` 消息里 → 正常返回
-- system 只保留前 46 个字符 → 正常返回；第 47 个字符就足以触发
-- 在 system 前面加一句无关的话 → 正常返回
+**网关看的是系统提示词的开头，不是内容：**
 
-本分支的处理方式因此很简单：命中被拒签名时，在系统提示词**最前面插入一句无害前缀**（`You are a helpful assistant.`），系统提示词正文一字不改。
+| 请求形态 | 结果 |
+|---|---|
+| 同一句话放在 `user` 消息里 | 正常返回 |
+| system 只保留前 46 个字符 | 正常返回 |
+| system 保留到第 47 个字符 | **400 / 11128** |
+| system 前面加一句无关的话 | **正常返回** |
 
-## 免责声明
+**修复：**
 
-- 本分支是对 WorkBuddy 上游渠道校验的本地规避，上游策略变化后可能失效。
-- 与上游作者一样，请尊重 WorkBuddy 对官方客户端与第三方接入的区分。
-- 使用本插件即表示你自行承担相关风险；商业与办公场景请优先使用官方 WorkBuddy 客户端。
+1. `prepareChatBody()` 新增 `neutralizeRejectedSystemSignature()`——识别被拒的系统提示词开头签名，在其前面插入一句无害前缀（`You are a helpful assistant.`），**系统提示词正文一字不改**。
+2. `prepareCnChatBody()` 补齐 `developer`→`system` 归一化与签名规避，使 CN 区与国际区的防护一致。
+3. 新增回归测试 `tests/issue-144-system-signature.spec.ts`（9 条）。
+
+## 前置条件
+
+- 已安装并登录 **WorkBuddy 桌面客户端**（国内版）或 WorkBuddy AI 桌面 App（插件复用 App 的登录状态）
+- DSH 内核 `0.2.1-rc.2`（其它版本对应关系见文末「版本兼容与历史版本」，沿用上游）
+- 可访问 WorkBuddy 上游
+
+## 状态
+
+- 59 个测试文件 / 882 passed
+- typecheck + build 全绿
+- npm：`dsh-workbuddy-connect-fixed@0.1.0`
+- GitHub Release：<https://github.com/lin666hub/dsh-workbuddy-connect-fixed/releases/tag/v0.1.0>
+
+## 重要声明
+
+- 原项目作者已声明停止维护，并明确表示尊重 WorkBuddy 对官方客户端与第三方接入的区分。本分支仅作技术研究与本地自救用途；**请自行评估 WorkBuddy 的服务条款**，办公场景建议优先使用官方 WorkBuddy 客户端。
+- 本分支是对上游渠道校验的本地规避，上游策略变化后可能失效。
 - 本项目与 WorkBuddy / CodeBuddy / Tencent 无隶属关系。
 
 ---

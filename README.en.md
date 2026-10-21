@@ -1,50 +1,72 @@
 # DSH WorkBuddy Connect (Fixed)
 
+[![npm](https://img.shields.io/npm/v/dsh-workbuddy-connect-fixed.svg)](https://www.npmjs.com/package/dsh-workbuddy-connect-fixed)
+[![CI](https://github.com/lin666hub/dsh-workbuddy-connect-fixed/actions/workflows/ci.yml/badge.svg)](https://github.com/lin666hub/dsh-workbuddy-connect-fixed/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/npm/l/dsh-workbuddy-connect-fixed.svg)](LICENSE)
+
 > **Third-party fixed fork**
 >
 > This repository is a derivative of [`corrinehu/dsh-workbuddy-connect`](https://github.com/corrinehu/dsh-workbuddy-connect), under its MIT licence, with the original authorship retained.
->
-> **What this fork fixes**: since 2026-10-20 the WorkBuddy gateway runs a channel check on non-official clients. A request whose system prompt opens with another client's identity line (for example DeepSeek Harness's `You are an AI agent powered by DeepSeek Harness.`) is answered with HTTP 400 / code 11128 「请求被拦截，请重新发送」, which makes WorkBuddy models unusable inside DSH.
->
-> **Changes**:
-> 1. `prepareChatBody()` gained `neutralizeRejectedSystemSignature()`, which recognises a refused system-prompt opening and puts a harmless prefix in front of it while keeping the prompt body verbatim.
-> 2. `prepareCnChatBody()` now applies the same `developer`→`system` normalisation and signature neutralization, so the CN and international wires are defended alike.
-> 3. New regression test `tests/issue-144-system-signature.spec.ts`.
->
-> **Note**: the upstream author has retired the project and states that WorkBuddy's boundary between its official client and third-party integrations is respected. This branch is a technical study and a local workaround; please read WorkBuddy's terms yourself, and prefer the official WorkBuddy client for work use.
->
-> The upstream README follows below; the original retirement notice is kept in [the upstream README](./README.upstream.md).
 
 ## Install
 
 ```powershell
-# in your DSH profile directory
 pnpm add dsh-workbuddy-connect-fixed
 ```
 
-## How the fix works
+From source:
 
-The upstream refusal looks like this:
+```powershell
+git clone https://github.com/lin666hub/dsh-workbuddy-connect-fixed.git
+cd dsh-workbuddy-connect-fixed
+pnpm install
+pnpm run build
+```
+
+## What this fork fixes
+
+Since 2026-10-20 the WorkBuddy gateway runs a channel check on non-official clients. A request whose system prompt opens with another client's identity line — for example DeepSeek Harness's `You are an AI agent powered by DeepSeek Harness.` — is answered with:
 
 ```json
 {"code":11128,"msg":"Illegal API invocation from an unapproved channel",
- "displayMsg":{"zh":"the request was blocked, please send it again"},
- "displayTips":{"zh":"this call failed channel verification, possibly because it was not sent from an official client."}}
+ "displayMsg":{"zh":"请求被拦截，请重新发送"},
+ "displayTips":{"zh":"这次调用没通过渠道校验，可能不是官方客户端发出的。"}}
 ```
 
-The gateway checks the **opening** of the system message, not the content:
+The result: switching to any WorkBuddy model inside DeepSeek Harness fails immediately.
 
-- the same sentence in a `user` message is served normally
-- a system message truncated to 46 characters is served normally; the 47th character is enough to trip it
-- putting any unrelated sentence in front of it is served normally
+**The gateway looks at the opening of the system message, not at its content:**
 
-So the fix is small: when the refused signature is recognised, a harmless prefix (`You are a helpful assistant.`) is put in front of the system prompt, and the prompt body is kept verbatim.
+| Request shape | Result |
+|---|---|
+| the same sentence in a `user` message | served normally |
+| system message truncated to 46 characters | served normally |
+| system message kept to the 47th character | **400 / 11128** |
+| any unrelated sentence placed in front of it | **served normally** |
+
+**The fix:**
+
+1. `prepareChatBody()` gained `neutralizeRejectedSystemSignature()`, which recognises a refused system-prompt opening and puts a harmless prefix (`You are a helpful assistant.`) in front of it while keeping the prompt body **verbatim**.
+2. `prepareCnChatBody()` now applies the same `developer`→`system` normalisation and signature neutralization, so the CN and international wires are defended alike.
+3. New regression test `tests/issue-144-system-signature.spec.ts` (9 cases).
+
+## Requirements
+
+- **WorkBuddy desktop client** (CN edition) or WorkBuddy AI desktop app installed and signed in — the plugin reuses the app's session
+- DSH kernel `0.2.1-rc.2` (other versions are listed in the upstream compatibility table further down)
+- Network access to the WorkBuddy upstream
+
+## Status
+
+- 59 test files / 882 passed
+- typecheck + build green
+- npm: `dsh-workbuddy-connect-fixed@0.1.0`
+- GitHub release: <https://github.com/lin666hub/dsh-workbuddy-connect-fixed/releases/tag/v0.1.0>
 
 ## Disclaimer
 
-- This branch is a local workaround for WorkBuddy's channel check; it may stop working when the upstream policy changes.
-- Like the upstream author, we respect WorkBuddy's boundary between its official client and third-party integrations.
-- Use at your own risk; prefer the official WorkBuddy client for commercial and work use.
+- The upstream author has retired the project and states that WorkBuddy's boundary between its official client and third-party integrations is respected. This branch is a technical study and a local workaround — **please read WorkBuddy's terms yourself**, and prefer the official WorkBuddy client for work use.
+- This branch is a local workaround for the upstream channel check and may stop working when the upstream policy changes.
 - This project is not affiliated with WorkBuddy / CodeBuddy / Tencent.
 
 ---
