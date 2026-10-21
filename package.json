@@ -1,7 +1,7 @@
 {
   "name": "dsh-workbuddy-connect-fixed",
   "displayName": "DSH WorkBuddy Connect (Fixed)",
-  "description": "将 WorkBuddy 桌面 App 包含的模型自动接入 DeepSeek Harness — bring WorkBuddy desktop app models into DeepSeek Harness with zero configuration.",
+  "description": "WorkBuddy 桌面 App 模型接入 DeepSeek Harness 的第三方修复分支：绕过上游对非官方客户端系统提示词签名的渠道校验（HTTP 400 / 11128）。Third-party fixed fork of dsh-workbuddy-connect: works around the upstream channel check that refuses system prompts opening with a rival client identity line.",
   "version": "0.1.0",
   "author": "dsh-workbuddy-connect-fixed contributors",
   "keywords": [
@@ -26,7 +26,7 @@
     "build": "tsdown",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
-    "check": "pnpm run typecheck && pnpm run test && pnpm run build"
+    "check": "npm run typecheck && npm run test && npm run build"
   },
   "exports": {
     ".": {
