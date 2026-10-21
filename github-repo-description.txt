@@ -1,1 +1,0 @@
-第三方修复分支：绕过 WorkBuddy 网关对系统提示词身份签名的渠道校验（HTTP 400 / 11128「请求被拦截」），使 WorkBuddy 模型可在 DeepSeek Harness 中正常使用。MIT 衍生自 corrinehu/dsh-workbuddy-connect 0.7.9，保留原作者署名。仅供技术研究，请自行评估服务条款；办公场景建议用官方客户端。
