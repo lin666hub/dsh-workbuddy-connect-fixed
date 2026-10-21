@@ -11,9 +11,53 @@
 > 2. `prepareCnChatBody()` 补齐 `developer`→`system` 归一化与签名规避，使 CN 区与国际区的防护一致。
 > 3. 新增回归测试 `tests/issue-144-system-signature.spec.ts`。
 >
-> **重要声明**：原项目作者已声明停止维护，并表示尊重 WorkBuddy 对官方客户端与第三方接入的区分。本分支仅作技术研究与本地自救用途，使用前请自行评估 WorkBuddy 的使用条款；商业或办公场景请优先使用官方 WorkBuddy 客户端。
+> **重要声明**：原项目作者已声明停止维护，并明确表示尊重 WorkBuddy 对官方客户端与第三方接入的区分。本分支仅作技术研究与本地自救用途；请自行评估 WorkBuddy 的服务条款，办公场景建议优先使用官方 WorkBuddy 客户端。
 >
 > 原项目 README 与完整文档见下方（[English](./README.en.md) | 中文），原项目停止维护公告见 [原文 README](./README.upstream.md)。
+
+## 安装
+
+```powershell
+# 在 DSH profile 目录执行
+pnpm add dsh-workbuddy-connect-fixed
+```
+
+或让本机已有的 Agent 帮你安装（把这段原样发给它）：
+
+```text
+请帮我安装 DSH（DeepSeek Harness）插件 dsh-workbuddy-connect-fixed（项目地址：https://github.com/lin666hub/dsh-workbuddy-connect-fixed）：
+先阅读项目 README，确认我使用的界面（Web / Desktop / TUI）与 DSH 内核版本，桌面版以 App 内置核心为准；
+再从 npm 安装 dsh-workbuddy-connect-fixed@0.1.0；
+任何本地文件或配置改动先征得我同意并做好备份；
+装完后验证模型选择器里出现 WorkBuddy 分组，并陪我完成一次简短对话。
+```
+
+> 内核与插件版本对应关系见文末「版本兼容与历史版本」（沿用上游）。
+
+## 修复原理
+
+上游的拒绝文案是：
+
+```json
+{"code":11128,"msg":"Illegal API invocation from an unapproved channel",
+ "displayMsg":{"zh":"请求被拦截，请重新发送"},
+ "displayTips":{"zh":"这次调用没通过渠道校验，可能不是官方客户端发出的。"}}
+```
+
+网关对**系统提示词的开头**做渠道校验，而不是对内容做检测：
+
+- 同一句话放在 `user` 消息里 → 正常返回
+- system 只保留前 46 个字符 → 正常返回；第 47 个字符就足以触发
+- 在 system 前面加一句无关的话 → 正常返回
+
+本分支的处理方式因此很简单：命中被拒签名时，在系统提示词**最前面插入一句无害前缀**（`You are a helpful assistant.`），系统提示词正文一字不改。
+
+## 免责声明
+
+- 本分支是对 WorkBuddy 上游渠道校验的本地规避，上游策略变化后可能失效。
+- 与上游作者一样，请尊重 WorkBuddy 对官方客户端与第三方接入的区分。
+- 使用本插件即表示你自行承担相关风险；商业与办公场景请优先使用官方 WorkBuddy 客户端。
+- 本项目与 WorkBuddy / CodeBuddy / Tencent 无隶属关系。
 
 ---
 # DSH WorkBuddy Connect

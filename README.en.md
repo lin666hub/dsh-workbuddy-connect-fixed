@@ -15,6 +15,38 @@
 >
 > The upstream README follows below; the original retirement notice is kept in [the upstream README](./README.upstream.md).
 
+## Install
+
+```powershell
+# in your DSH profile directory
+pnpm add dsh-workbuddy-connect-fixed
+```
+
+## How the fix works
+
+The upstream refusal looks like this:
+
+```json
+{"code":11128,"msg":"Illegal API invocation from an unapproved channel",
+ "displayMsg":{"zh":"the request was blocked, please send it again"},
+ "displayTips":{"zh":"this call failed channel verification, possibly because it was not sent from an official client."}}
+```
+
+The gateway checks the **opening** of the system message, not the content:
+
+- the same sentence in a `user` message is served normally
+- a system message truncated to 46 characters is served normally; the 47th character is enough to trip it
+- putting any unrelated sentence in front of it is served normally
+
+So the fix is small: when the refused signature is recognised, a harmless prefix (`You are a helpful assistant.`) is put in front of the system prompt, and the prompt body is kept verbatim.
+
+## Disclaimer
+
+- This branch is a local workaround for WorkBuddy's channel check; it may stop working when the upstream policy changes.
+- Like the upstream author, we respect WorkBuddy's boundary between its official client and third-party integrations.
+- Use at your own risk; prefer the official WorkBuddy client for commercial and work use.
+- This project is not affiliated with WorkBuddy / CodeBuddy / Tencent.
+
 ---
 # DSH WorkBuddy Connect
 

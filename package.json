@@ -48,9 +48,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/YOUR-GITHUB-ID/dsh-workbuddy-connect-fixed.git"
+    "url": "git+https://github.com/lin666hub/dsh-workbuddy-connect-fixed.git"
   },
-  "homepage": "https://github.com/YOUR-GITHUB-ID/dsh-workbuddy-connect-fixed#readme",
+  "homepage": "https://github.com/lin666hub/dsh-workbuddy-connect-fixed#readme",
   "bugs": "https://github.com/corrinehu/dsh-workbuddy-connect/issues",
   "dsh": {
     "bundle": {
