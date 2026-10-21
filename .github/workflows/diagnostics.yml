@@ -1,0 +1,79 @@
+name: diagnostics
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Commit or branch to check (record resolved SHA)
+        required: true
+        default: dfb17949cbf9ba5d93ac41c76cbe436a3a331d07
+        type: string
+      test_scope:
+        description: full runs the whole check suite (default); windows-registry runs only the PowerShell 5.1 registry integration spec, on the Windows runners
+        required: false
+        default: full
+        type: choice
+        options: [full, windows-registry]
+permissions:
+  contents: read
+jobs:
+  check:
+    name: diagnostics (${{ matrix.os }}, Node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      # The scoped mode needs only the Windows runners; `full` (and any
+      # dispatch that omits the input) keeps the exact original matrix.
+      # `inputs` is an allowed context for strategy.matrix, and the
+      # &&/|| fromJSON form is GitHub's documented conditional-matrix shape.
+      matrix:
+        os: ${{ inputs.test_scope == 'windows-registry' && fromJSON('["windows-2022", "windows-2025"]') || fromJSON('["macos-latest", "ubuntu-latest", "windows-2022", "windows-2025"]') }}
+        node: [22]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: record environment
+        run: |
+          mkdir -p ci-logs
+          git rev-parse HEAD > ci-logs/commit.txt
+          node -e 'const os = require("node:os"); console.log(JSON.stringify({platform: process.platform, arch: process.arch, release: os.release(), version: os.version(), node: process.version}, null, 2))' > ci-logs/environment.json
+          pnpm --version > ci-logs/pnpm-version.txt
+      - name: install dependencies
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee ci-logs/install.log
+      - name: check
+        if: inputs.test_scope != 'windows-registry'
+        run: |
+          set -o pipefail
+          pnpm run check 2>&1 | tee ci-logs/check.log
+      # Scoped mode: prove the real-process Windows registry integration in
+      # isolation (issues #105/#106/#107). No full suite, no file parallelism,
+      # one worker — the registry subprocesses then run without the load of a
+      # 46-file concurrent run, so the production step budgets measure the
+      # step itself, not runner contention.
+      - name: check (windows-registry scope)
+        if: inputs.test_scope == 'windows-registry'
+        run: |
+          set -o pipefail
+          pnpm run typecheck 2>&1 | tee ci-logs/check.log
+          pnpm exec vitest run tests/windows-powershell-registry-integration.spec.ts --maxWorkers=1 --no-file-parallelism 2>&1 | tee -a ci-logs/check.log
+      - name: upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-log-${{ matrix.os }}
+          path: ci-logs/
+          if-no-files-found: warn
+          retention-days: 14

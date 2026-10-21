@@ -1,0 +1,611 @@
+/**
+ * Per-model reasoning-effort entry beside the Composer's model selector.
+ *
+ * Interaction follows the Fast Mode control `dsh-codex-connect` ships in this
+ * same seat, which is the established shape for composer chrome here:
+ *
+ * - a **static inline label** next to the icon names the feature ("Reasoning
+ *   levels"), set smaller and dimmer than the surrounding chrome so it reads as
+ *   an annotation on the icon. It never carries state: the verified levels
+ *   already appear in the model dropdown (the adapter exposes them as
+ *   selectable efforts), so repeating them here would duplicate the real answer
+ *   and make the label's width jump as results change.
+ * - a **hover/focus tooltip** carries the state and the click's purpose, the way
+ *   Fast Mode's tooltip explains its current speed.
+ * - the **confirmation** is a small bubble anchored to the control, not a
+ *   `window.confirm`. Probing spends real credit, so a confirmation stays — but
+ *   it belongs next to the thing it acts on, sized to one line plus two small
+ *   buttons.
+ * - a **credit badge** (#99): the account's remaining balance as one tiny
+ *   annotation on the same seat, read from the same status document as the
+ *   probe entry. Hidden whenever the document has no answer (signed-out,
+ *   error, missing `credits`); zero is a real balance and is shown, `unlimited`
+ *   renders as ∞ rather than as 0. The badge is why the control stays mounted
+ *   for non-candidate models: the probe entry alone is what disappears for
+ *   them.
+ * - a **↻ beside the badge** is the only re-read after the mount fetch: there
+ *   is no interval and no focus polling, because every status GET also queries
+ *   billing upstream and the balance should not refresh behind the user's
+ *   back. A failed manual read hides the balance rather than passing the old
+ *   one off as current; a click also picks up probes started elsewhere, which
+ *   is the reconcile the removed poll used to provide.
+ *
+ * @module dsh-workbuddy-connect/client/probe-control
+ */
+
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
+import type { CSSProperties } from 'react'
+import type { ModelDirectory } from '@deepseek-ai/dsh-client-ui-model-selection/client'
+import { CARD_VARIANTS, type WorkBuddyCardVariant, type WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
+import { isWorkBuddyWebStatus } from './status-document.ts'
+import type { WorkBuddyWebProbeModel, WorkBuddyWebStatus } from '../status-paths.ts'
+
+/** Injected props; `directory` resolves the session's current model selection. */
+export interface WorkBuddyProbeControlProps extends WorkBuddyPluginCardInjected {
+  directory: ModelDirectory['store']
+}
+
+/**
+ * The card (and therefore the routes) a selected provider belongs to.
+ *
+ * The control serves both WorkBuddy providers from one seat, so the provider id
+ * is what selects the status and probe endpoints. Returning `undefined` for any
+ * other provider is what keeps the icon off every non-WorkBuddy model.
+ */
+export function cardVariantFor(provider: string): WorkBuddyCardVariant | undefined {
+  return CARD_VARIANTS.find(card => card.id === provider)
+}
+
+// The host slot's baseline sits a touch high and leaves a full inter-control gap
+// before the model picker. Nudge only this annotation down and inward so it
+// reads as part of the selected model rather than a separate toolbar item.
+const wrapperStyle: CSSProperties = {
+  display: 'inline-flex',
+  position: 'relative',
+  alignItems: 'center',
+  transform: 'translateY(2px)',
+  marginRight: -8,
+}
+const buttonStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  // Tight gap: the label is an annotation on the icon, not a peer of the model
+  // name it sits beside.
+  gap: 2,
+  height: 30,
+  padding: '0 6px',
+  border: 0,
+  borderRadius: 8,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  font: 'inherit',
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+}
+
+/**
+ * The inline label. Smaller and dimmer than the surrounding chrome on purpose:
+ * it names the feature, so it should read as an annotation attached to the icon
+ * rather than compete with the adjacent model selector.
+ */
+const labelStyle: CSSProperties = {
+  fontSize: 11,
+  lineHeight: '16px',
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
+/**
+ * The credit badge (#99). The same annotation register as {@link labelStyle} —
+ * small and dim, on the model name's side of the seat — so a changing balance
+ * reads as a note on the selection, not composer chrome of its own.
+ */
+const creditStyle: CSSProperties = {
+  fontSize: 11,
+  lineHeight: '16px',
+  color: 'var(--dsw-alias-label-tertiary)',
+  whiteSpace: 'nowrap',
+  padding: '0 4px 0 0',
+}
+
+/**
+ * The badge's ↻ (#99): the only re-read after the mount fetch. An icon-only
+ * button in the same dim register, so it reads as part of the annotation
+ * rather than a fourth composer control.
+ */
+const refreshStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 20,
+  height: 20,
+  padding: 0,
+  border: 0,
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
+/** Tooltip bubble: the Fast Mode shape (nowrap, one line, above the control). */
+const tooltipStyle: CSSProperties = {
+  position: 'absolute',
+  left: '50%',
+  bottom: 'calc(100% + 8px)',
+  zIndex: 1000,
+  transform: 'translateX(-50%)',
+  padding: '4px 8px',
+  borderRadius: 6,
+  background: 'var(--dsw-specific-tip, #1f2329)',
+  boxShadow: 'var(--dsw-shadow-lv2)',
+  color: 'var(--dsw-alias-label-primary, #fff)',
+  fontSize: 12,
+  lineHeight: '18px',
+  whiteSpace: 'nowrap',
+  pointerEvents: 'none',
+}
+
+/** Confirmation bubble: same anchor, but interactive and allowed to wrap. */
+const confirmStyle: CSSProperties = {
+  position: 'absolute',
+  right: 0,
+  bottom: 'calc(100% + 8px)',
+  zIndex: 1001,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  width: 260,
+  padding: '10px 12px',
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'var(--dsw-alias-bg-layer-1, #fff)',
+  boxShadow: 'var(--dsw-shadow-lv2)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 12,
+  lineHeight: '18px',
+}
+const confirmRowStyle: CSSProperties = { display: 'flex', justifyContent: 'flex-end', gap: 8 }
+const confirmButtonStyle: CSSProperties = {
+  padding: '3px 10px',
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  fontSize: 12,
+  cursor: 'pointer',
+}
+/**
+ * Primary action inside the confirmation bubble.
+ *
+ * The fill and its text colour must come as a pair: `brand-primary` resolves to
+ * a light accent in this theme, so hardcoding `color: #fff` on top of it renders
+ * white-on-white. `button-primary-fill` + `label-primary-foreground` is the
+ * theme's own pair for exactly this, and is what `dsh-codex-connect` uses for
+ * the same job.
+ */
+const primaryButtonStyle: CSSProperties = {
+  ...confirmButtonStyle,
+  border: '1px solid var(--dsw-alias-button-primary-fill)',
+  background: 'var(--dsw-alias-button-primary-fill)',
+  color: 'var(--dsw-alias-label-primary-foreground)',
+}
+
+/**
+ * Result note: a single line + a dismiss button, anchored to the control's
+ * right side. Smaller than the confirmation bubble because it carries an
+ * *outcome*, not a *decision* — the work is done, the user only has to read
+ * and dismiss.
+ */
+const noteStyle: CSSProperties = {
+  position: 'absolute',
+  right: 0,
+  bottom: 'calc(100% + 8px)',
+  zIndex: 1001,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '6px 10px',
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'var(--dsw-alias-bg-layer-1)',
+  boxShadow: 'var(--dsw-shadow-lv2)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 12,
+  lineHeight: '18px',
+  whiteSpace: 'nowrap',
+}
+/**
+ * The note's dismiss action. Outlined rather than bare text: inside an already
+ * bordered bubble, an unbordered word does not read as something you can click.
+ * Matches the outlined pill convention the plugin's other secondary actions use.
+ */
+const noteDismissStyle: CSSProperties = {
+  padding: '2px 8px',
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-secondary)',
+  font: 'inherit',
+  fontSize: 12,
+  lineHeight: '18px',
+  cursor: 'pointer',
+}
+
+/**
+ * The feature's static inline label. Deliberately not a state readout — see the
+ * module comment.
+ */
+function useLabel(t: WorkBuddyPluginCardInjected['t']): string {
+  return t('probeLabel')
+}
+
+/** Pick the model's recorded observation out of the probe section. */
+function resultFor(status: WorkBuddyWebStatus, model: string): WorkBuddyWebProbeModel | undefined {
+  if (status.status !== 'signed-in') return undefined
+  return status.probe?.results.find(result => result.id === model)
+}
+
+/**
+ * The credit badge's one line, or `undefined` whenever there is no honest
+ * answer to show (#99).
+ *
+ * Every non-answer collapses to hidden: a signed-out or errored document, a
+ * missing `credits` section (which is also all a `creditsError` leaves behind),
+ * or a total that is not a finite number — the status guard deliberately does
+ * not validate optional fields, so this narrows before reading. Zero is a real
+ * balance and is shown; `unlimited` renders as ∞, never as 0.
+ */
+function creditBadge(
+  status: WorkBuddyWebStatus | undefined,
+  card: WorkBuddyCardVariant,
+  t: WorkBuddyPluginCardInjected['t'],
+): string | undefined {
+  if (status === undefined || status.status !== 'signed-in') return undefined
+  // A document that names a credit error has no trustworthy balance — even in
+  // the malformed case where it also carries a `credits` section.
+  if (status.creditsError !== undefined) return undefined
+  const credits = status.credits
+  if (credits === undefined) return undefined
+  const total = credits.unlimited === true
+    ? '∞'
+    : typeof credits.total === 'number' && Number.isFinite(credits.total)
+      ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(credits.total)
+      : undefined
+  if (total === undefined) return undefined
+  return t('composerCredit', { prefix: card.creditPrefix, total })
+}
+
+/**
+ * The one-line tooltip: current state first, then what a click does — the same
+ * two-part shape Fast Mode uses.
+ *
+ * A recorded result outranks a remembered failure. `failed` only means "the last
+ * run from this control did not complete"; the host can record a result for the
+ * same model at any time (a detection started from the settings card, another
+ * conversation, or a finished sweep), and the levels the user paid for are the
+ * more useful answer than the stale failure. Failure copy is what remains when
+ * there is no result to report.
+ */
+function tooltipText(
+  t: WorkBuddyPluginCardInjected['t'],
+  model: string,
+  state: { busy: boolean; failed: boolean; result?: WorkBuddyWebProbeModel | undefined },
+): string {
+  if (state.busy) return t('probeRunning', { model })
+  const result = state.result
+  if (result !== undefined) {
+    if (result.validation === 'validating' && result.efforts.length > 0) {
+      return t('probeTooltipVerified', { levels: result.efforts.join(' / ') })
+    }
+    if (result.validation === 'non-validating') return t('probeTooltipNotValidating')
+    return t('probeTooltipRetry')
+  }
+  if (state.failed) return t('probeTooltipRetry')
+  return t('probeTooltipIdle', { model })
+}
+
+/** Model-independent shell: resolves the selection, then delegates per model. */
+export function WorkBuddyProbeControl({ directory, t }: WorkBuddyProbeControlProps) {
+  const subscribe = useCallback((listener: () => void) => directory.subscribe(listener), [directory])
+  const snapshot = useCallback(() => directory.getSnapshot(), [directory])
+  // The host's `ModelDirectoryState.current` is `ModelSelection | null` — null,
+  // never undefined, while the session's projection or the shared catalog is
+  // still loading (#125). The prop's type resolves to `any` here (the host's
+  // `SnapshotStore` module is not installed and `skipLibCheck` skips its
+  // re-export), so the runtime union is asserted once to keep the handling
+  // below checked.
+  const selection = useSyncExternalStore(subscribe, snapshot, snapshot).current as
+    { provider: string, model: string } | null | undefined
+  // A not-ready selection (`null`/`undefined`) renders nothing but KEEPS the
+  // component mounted and subscribed: the directory store replaces its
+  // snapshot once the session's projection lands, `useSyncExternalStore`
+  // re-renders, and the seat appears. The old code guarded only `undefined`
+  // (a value this store never produces) and dereferenced `selection.provider`
+  // off `null`, which the slot runtime's per-entry error boundary turns into
+  // the badge and the ↻ disappearing together until a full reload — the exact
+  // report of #125 / #132.
+  //
+  // Deliberately NO remembered seat across the not-ready window: which
+  // account's balance may show is a property of THIS session's selection, and
+  // while it is unknown (another session's composer may be switching to a
+  // non-WorkBuddy provider right now) showing the last WorkBuddy variant
+  // anywhere would present — and bill-query — the wrong provider's account.
+  // The blank window is brief by construction; a resolved WorkBuddy selection
+  // restores the seat through the store notification above.
+  if (selection == null) return null
+  const card = cardVariantFor(selection.provider)
+  // `card` identifies both the variant and its routes: a selection under either
+  // provider resolves to exactly one card's status/probe pair, so the control
+  // can never read one variant's state while probing the other. A foreign
+  // provider hides the seat; a WorkBuddy one mounts it fresh.
+  // A new selection gets fresh state; a late response cannot target the new model.
+  return card === undefined
+    ? null
+    : <ModelProbe key={`${card.id}:${selection.model}`} model={selection.model} card={card} label={useLabel(t)} t={t} />
+}
+
+function ModelProbe({ model, card, label, t }: {
+  model: string
+  card: WorkBuddyCardVariant
+  label: string
+} & WorkBuddyPluginCardInjected) {
+  const [status, setStatus] = useState<WorkBuddyWebStatus>()
+  const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [tooltipVisible, setTooltipVisible] = useState(false)
+  const [failed, setFailed] = useState(false)
+  // Only an explicit detection response opens a note. Background reads and
+  // remounts never replay stored results; no persisted "seen" marks are needed.
+  const [note, setNote] = useState<WorkBuddyWebProbeModel>()
+  /**
+   * A manual credit read failed (#99). The balance hides until a later read
+   * succeeds, so the old number can never pose as current; the probe state is
+   * untouched — the two features merely share one document.
+   */
+  const [creditFailed, setCreditFailed] = useState(false)
+  /** Whether a manual credit refresh is in flight, for the ↻'s busy state. */
+  const [refreshing, setRefreshing] = useState(false)
+  const inFlight = useRef(false)
+  const refreshingRef = useRef(false)
+  const mounted = useRef(false)
+  const readSeq = useRef(0)
+  const tooltipId = useId()
+
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    const seq = ++readSeq.current
+    const response = await fetch(card.statusPath, {
+      credentials: 'same-origin',
+      // The balance must not come from any intermediate cache: a manual ↻ is
+      // asking for exactly one fresh billing read.
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    /*
+     * A 200 does not promise a status document: the body may be empty, literal
+     * `null`, or a non-JSON page. Storing that unchecked would put a value in
+     * state that `resultFor` dereferences on the next render, so it is validated
+     * here with the same predicate the settings card uses. A rejection is left to
+     * the callers below, which already degrade quietly.
+     */
+    const value: unknown = await response.json().catch(() => undefined)
+    if (!isWorkBuddyWebStatus(value)) throw new Error(t('statusResponseInvalid'))
+    if (mounted.current && !signal?.aborted && seq === readSeq.current) {
+      setStatus(value)
+      setCreditFailed(false)
+    }
+  }, [card.statusPath, t])
+
+  useEffect(() => {
+    mounted.current = true
+    const controller = new AbortController()
+    // One read on mount is all the automatic refreshing there is: every status
+    // GET also queries billing upstream, so the balance must not re-read
+    // behind the user's back. Later reads are the ↻ click and the trailing
+    // read after a probe this control started (which the user also clicked).
+    void refresh(controller.signal).catch(() => { /* the icon still works without state */ })
+    return () => {
+      mounted.current = false
+      controller.abort()
+    }
+  }, [refresh])
+
+  /**
+   * The ↻'s action (#99): one manual re-read through the same status route.
+   *
+   * The guard is a ref, not the state: two clicks inside one act batch both
+   * see the same stale `refreshing` closure, and only a synchronous check can
+   * keep the second click from sending a second billing read.
+   *
+   * A failure hides the balance (see `creditFailed`) instead of leaving the old
+   * number on screen as though it were fresh — but only when the failed read is
+   * still the newest one (`refresh` bumped `readSeq` for it, and nothing newer
+   * has started since). An out-of-date manual failure racing a successful
+   * probe's trailing read must not hide the fresh balance that just arrived:
+   * `readSeq` is what decides, and `refresh` itself already clears the flag on
+   * any newer successful write.
+   */
+  const checkNow = async (): Promise<void> => {
+    if (refreshingRef.current) return
+    refreshingRef.current = true
+    setRefreshing(true)
+    // The seq this manual read took; `refresh` bumps `readSeq` before awaiting.
+    const seqAtStart = readSeq.current + 1
+    try {
+      await refresh()
+    } catch {
+      // Only hide the balance when this failure is still about the newest read.
+      if (mounted.current && readSeq.current === seqAtStart) setCreditFailed(true)
+    } finally {
+      refreshingRef.current = false
+      if (mounted.current) setRefreshing(false)
+    }
+  }
+
+  const probe = status?.status === 'signed-in' ? status.probe : undefined
+  const key = status?.status === 'signed-in' ? status.probeKey : undefined
+  const result = status === undefined ? undefined : resultFor(status, model)
+  const eligible = probe?.candidates.includes(model) === true
+  // Once a model has been detected it leaves the candidate list, so keep the
+  // entry visible for it: that is the case the tooltip reports a result in.
+  const visible = eligible || result !== undefined
+
+  // A recorded result answers the question a remembered failure was about, so
+  // the flag is dropped with it rather than lingering into the next render.
+  useEffect(() => {
+    if (result !== undefined) setFailed(false)
+  }, [result])
+
+  // A selection change must not strand an open bubble.
+  useEffect(() => { setConfirming(false); setNote(undefined) }, [model])
+
+  const detect = async (): Promise<void> => {
+    if (key === undefined || inFlight.current || probe?.running === true) return
+    inFlight.current = true
+    setNote(undefined)
+    setConfirming(false)
+    setBusy(true)
+    setFailed(false)
+    try {
+      const response = await fetch(card.probePath, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
+        body: JSON.stringify({ action: 'probe', model }),
+      })
+      const body = await response.json() as {
+        state?: string; validation?: string; efforts?: unknown
+      }
+      if (!response.ok || body.state !== 'ok'
+        || (body.validation !== 'validating' && body.validation !== 'non-validating')
+        || !Array.isArray(body.efforts) || !body.efforts.every(effort => typeof effort === 'string')) {
+        throw new Error('probe failed')
+      }
+      // This response belongs to the explicit click, even when the host reused
+      // an older cached result. Do not wait for /status (which fetches credit),
+      // or infer completion from wall-clock timestamps and background polls.
+      if (mounted.current) {
+        const completed: WorkBuddyWebProbeModel = {
+          id: model, name: model, validation: body.validation,
+          efforts: body.efforts, probedAt: Date.now(),
+        }
+        setNote(completed)
+      }
+      void refresh().catch(() => { /* Credit/status failure does not undo a completed probe. */ })
+    } catch {
+      if (mounted.current) setFailed(true)
+    } finally {
+      inFlight.current = false
+      if (mounted.current) setBusy(false)
+    }
+  }
+
+  // The badge reads the same status document the probe entry does, so it is
+  // available exactly when a balance was answered — including for models that
+  // have nothing to probe. A failed manual read hides it (never the old number
+  // posing as fresh); the ↻ stays as the retry and is the seat's one re-read
+  // affordance whatever the document says, which is also how the control
+  // recovers from an unreadable first read.
+  const credit = creditFailed ? undefined : creditBadge(status, card, t)
+
+  const text = tooltipText(t, model, { busy, result, failed })
+  const disabled = busy || probe?.running === true || key === undefined
+  // Both bubbles and the tooltip anchor to the same spot above the control, so
+  // only one may be open at a time. The confirmation and the result note both
+  // suppress the tooltip: leaving it visible would overlap them, and the note
+  // already states the same outcome the tooltip would.
+  const showTooltip = tooltipVisible && !confirming && note === undefined
+
+  return (
+    <span
+      style={wrapperStyle}
+    >
+      <button
+        type="button"
+        style={{ ...refreshStyle, opacity: refreshing ? 0.6 : 1, cursor: refreshing ? 'default' : 'pointer' }}
+        title={t('composerCreditRefresh')}
+        aria-label={t('composerCreditRefresh')}
+        aria-busy={refreshing}
+        disabled={refreshing}
+        onClick={() => { void checkNow() }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+          <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+          <path d="M20 4v4h-4" />
+        </svg>
+      </button>
+
+      {credit === undefined ? null : <span style={creditStyle}>{credit}</span>}
+
+      {visible && (
+        <button
+          type="button"
+          aria-label={text}
+          aria-describedby={showTooltip ? tooltipId : undefined}
+          aria-busy={busy}
+          aria-expanded={confirming}
+          disabled={disabled}
+          onClick={() => { setConfirming(true) }}
+          onMouseEnter={() => { setTooltipVisible(true) }}
+          onMouseLeave={() => { setTooltipVisible(false) }}
+          onFocus={() => { setTooltipVisible(true) }}
+          onBlur={() => { setTooltipVisible(false) }}
+          style={{ ...buttonStyle, opacity: disabled && !confirming ? 0.6 : 1, cursor: disabled ? 'default' : 'pointer' }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="1.6" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9" />
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 12 20 4" />
+            <circle cx="12" cy="12" r="1" />
+          </svg>
+          <span style={labelStyle}>{label}</span>
+        </button>
+      )}
+
+      {visible && showTooltip && (
+        <span id={tooltipId} role="tooltip" style={tooltipStyle}>{text}</span>
+      )}
+
+      {visible && confirming && (
+        <span style={confirmStyle}>
+          <span>{t('probeBubbleBody')}</span>
+          <span style={confirmRowStyle}>
+            <button type="button" style={confirmButtonStyle} onClick={() => { setConfirming(false) }}>
+              {t('cancel')}
+            </button>
+            <button type="button" style={primaryButtonStyle} onClick={() => { void detect() }}>
+              {t('probeConfirmAction')}
+            </button>
+          </span>
+        </span>
+      )}
+
+      {visible && note !== undefined && (
+        <span role="status" aria-live="polite" style={noteStyle}>
+          <span>{noteText(t, note)}</span>
+          <button
+            type="button"
+            style={noteDismissStyle}
+            onClick={() => {
+              setNote(undefined)
+            }}
+          >
+            {t('probeNoteDismiss')}
+          </button>
+        </span>
+      )}
+    </span>
+  )
+}
+
+/** Compose the one-line outcome string the note bubble shows. */
+function noteText(t: WorkBuddyPluginCardInjected['t'], result: WorkBuddyWebProbeModel): string {
+  if (result.validation === 'validating' && result.efforts.length > 0) {
+    return t('probeNoteVerified', { levels: result.efforts.join(' / ') })
+  }
+  if (result.validation === 'non-validating') return t('probeNoteNotValidating')
+  return t('probeNoteUnknown')
+}
